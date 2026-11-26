@@ -1,15 +1,17 @@
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import Link from "next/link";
 import type { Metadata } from "next";
 import {
-  getLocation, getService,
+  getLocation, getLocationBySlugOnly, getService,
   getSiblingServices, getNearbyLocations,
   isLocationAndServiceAllowed,
   getAllLocations, getAllServices,
+  getDripLocations, getDripServices,
 } from "@/lib/data";
 import {
   BRAND_NAME, PHONE_NUMBER, PHONE_TEL, SITE_URL,
   NICHE, NICHE_PLURAL, NICHE_SINGULAR, SCHEMA_TYPE, CONTENT_SALT, ACTIVE_CONCEPT,
+  getDidForService,
 } from "@/lib/config";
 import { selectVariant } from "@/lib/spintax";
 import { CONTENT_PACK, renderTemplate } from "@/lib/content";
@@ -40,7 +42,8 @@ const CONCEPT_MAP: Record<string, any> = {
 };
 
 export async function generateStaticParams() {
-  // Pre-render top 50 metros x 10 core services (500 high-priority money pages) statically
+  // Static-First: Pre-render top 50 major metros x 10 core services (500 static money pages)
+  // Hard-capped so build never exceeds 35s or memory limits on Cloudflare / GitHub Actions
   const [allLocs, allSvcs] = await Promise.all([getAllLocations(), getAllServices()]);
   const topMetros = allLocs.slice().sort((a, b) => b.population - a.population).slice(0, 50);
   const coreServices = allSvcs.slice(0, 10);
@@ -60,12 +63,23 @@ export async function generateStaticParams() {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { state, place, service: serviceSlug } = await params;
+
+  if (state.includes("{") || place.includes("{") || state.includes("$") || state.includes("&")) {
+    permanentRedirect("/");
+  }
+
   const stateCode = state.toUpperCase();
   const [loc, svc] = await Promise.all([getLocation(stateCode, place), getService(serviceSlug)]);
-  if (!loc || !svc) return { title: "Not Found" };
-  const allowed = await isLocationAndServiceAllowed(stateCode, place, serviceSlug);
-  if (!allowed) return { title: "Not Found" };
+  if (!loc) {
+    const realLoc = getLocationBySlugOnly(place);
+    if (realLoc && svc) {
+      permanentRedirect(`/${realLoc.state_code.toLowerCase()}/${realLoc.place_slug}/${svc.service_slug}`);
+    }
+    return { title: "Not Found" };
+  }
+  if (!svc) return { title: "Not Found" };
 
+  const isAllowed = await isLocationAndServiceAllowed(stateCode, place, serviceSlug);
   const title       = `${svc.service_name} in ${loc.place_name}, ${stateCode}`.slice(0, 60);
   const description = `Need ${svc.service_name.toLowerCase()} in ${loc.place_name}, ${loc.state_name}? ${BRAND_NAME} provides 24/7 licensed service. Call ${PHONE_NUMBER} now.`.slice(0, 155);
   const canonicalUrl = `${SITE_URL}/${stateCode.toLowerCase()}/${loc.place_slug}/${svc.service_slug}`;
@@ -73,6 +87,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return {
     title,
     description,
+    robots: isAllowed ? { index: true, follow: true } : { index: false, follow: true },
     alternates: { canonical: canonicalUrl },
     openGraph: { title, description, url: canonicalUrl },
   };
@@ -163,20 +178,26 @@ function faqItems(svcName: string, cityName: string, keywords: string[], locId: 
   ];
 }
 
-function getRating(locId: number, svcId: number): { rating: number; reviewCount: number } {
-  const seed = Math.abs(locId * 17 + svcId * 13);
-  const ratings = [4.5, 4.6, 4.7, 4.8, 4.9];
-  return { rating: ratings[seed % ratings.length], reviewCount: 50 + (seed % 451) };
-}
+
 
 export default async function ServicePage({ params }: Props) {
   const { state, place, service: serviceSlug } = await params;
+
+  if (state.includes("{") || place.includes("{") || state.includes("$") || state.includes("&")) {
+    permanentRedirect("/");
+  }
+
   const stateCode = state.toUpperCase();
 
-  const [loc, svc] = await Promise.all([getLocation(stateCode, place), getService(serviceSlug)]);
-  if (!loc || !svc) notFound();
-  const allowed = await isLocationAndServiceAllowed(stateCode, place, serviceSlug);
-  if (!allowed) notFound();
+  let [loc, svc] = await Promise.all([getLocation(stateCode, place), getService(serviceSlug)]);
+  if (!loc) {
+    const realLoc = getLocationBySlugOnly(place);
+    if (realLoc && svc) {
+      permanentRedirect(`/${realLoc.state_code.toLowerCase()}/${realLoc.place_slug}/${svc.service_slug}`);
+    }
+    notFound();
+  }
+  if (!svc) notFound();
 
   const [siblings, nearby] = await Promise.all([
     getSiblingServices(loc.id, svc.id, 5),
@@ -189,7 +210,7 @@ export default async function ServicePage({ params }: Props) {
   const body1   = bodyParagraph1(svc.service_name, loc.place_name, svc.base_keywords, loc.id, svc.id);
   const body2   = bodyParagraph2(svc.service_name, loc.place_name, svc.base_keywords, loc.id, svc.id);
   const canonicalUrl = `${SITE_URL}/${stateCode.toLowerCase()}/${loc.place_slug}/${svc.service_slug}`;
-  const { rating, reviewCount } = getRating(loc.id, svc.id);
+  const did = getDidForService(svc.service_slug);
 
   // Generate real, data-driven local engineering narratives
   const narratives = generateLocalNarratives(loc, svc);
@@ -199,7 +220,7 @@ export default async function ServicePage({ params }: Props) {
     "@type": SCHEMA_TYPE,
     name: `${BRAND_NAME} — ${svc.service_name}`,
     description: `Professional ${svc.service_name.toLowerCase()} in ${loc.place_name}, ${loc.state_name}. Licensed and insured. Available 24/7.`,
-    telephone: PHONE_NUMBER,
+    telephone: did.number,
     url: canonicalUrl,
     areaServed: {
       "@type": "City",
@@ -207,13 +228,6 @@ export default async function ServicePage({ params }: Props) {
       containedInPlace: { "@type": "State", name: loc.state_name },
     },
     openingHours: "Mo-Su 00:00-23:59",
-    aggregateRating: {
-      "@type": "AggregateRating",
-      ratingValue: rating,
-      reviewCount,
-      bestRating: 5,
-      worstRating: 1,
-    },
     hasOfferCatalog: {
       "@type": "OfferCatalog",
       name: `${NICHE} Services`,
@@ -257,11 +271,11 @@ export default async function ServicePage({ params }: Props) {
         city={loc.place_name}
         service={svc.service_name}
         serviceSlug={svc.service_slug}
-        phone={PHONE_NUMBER}
-        phoneHref={`tel:${PHONE_TEL}`}
-        rating={rating}
-        reviewCount={reviewCount}
-        responseTime="30–45 min"
+        phone={did.number}
+        phoneHref={`tel:${did.tel}`}
+        rating={0}
+        reviewCount={0}
+        responseTime="Prompt Dispatch"
         licenseNo="State Licensed & Insured"
         brandName={BRAND_NAME}
       />

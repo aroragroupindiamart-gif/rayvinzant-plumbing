@@ -12,17 +12,43 @@ export const GA_ID      = process.env.NEXT_PUBLIC_GA_ID      ?? "";
 export const ADSENSE_ID = process.env.NEXT_PUBLIC_ADSENSE_ID ?? "";
 export const GSC_TOKEN  = process.env.NEXT_PUBLIC_GSC_TOKEN  ?? "";
 // Site launch date (YYYY-MM-DD) for automated drip feeding
-export const LAUNCH_DATE = process.env.NEXT_PUBLIC_LAUNCH_DATE ?? "";
+// Defaults to NEXT_PUBLIC_LAUNCH_DATE, or dynamically to today if not provided.
+export const LAUNCH_DATE = process.env.NEXT_PUBLIC_LAUNCH_DATE ?? new Date().toISOString().split("T")[0];
+
+// Drip mode:
+// - "progressive" (Script B): 24-week (6-month) crawl-budget drip with noindex on locked pages
+// - "all" (Script A): full ~337k page catalog exposed from Day 1
+export type DripMode = "all" | "progressive";
+export const DRIP_MODE: DripMode =
+  (process.env.NEXT_PUBLIC_DRIP_MODE ?? "progressive").toLowerCase() === "all" ? "all" : "progressive";
 
 /**
  * Per-site offset for spintax variant selection (see lib/spintax.ts).
- * Defaults to 0, which reproduces the original hash exactly — required so the
- * live site's rendered output never changes. Multi-site generation assigns each
- * new site a distinct non-zero salt so sites don't all pick the same variant
- * for the same city/service pair.
  */
 export const CONTENT_SALT = Number(process.env.NEXT_PUBLIC_CONTENT_SALT ?? 0) || 0;
 
 export const DESIGN_CONCEPT = process.env.NEXT_PUBLIC_DESIGN_CONCEPT ?? "";
 const CONCEPTS_LIST = ["dispatch", "credential", "journey", "hyperlocal", "onethumb"];
 export const ACTIVE_CONCEPT = DESIGN_CONCEPT || CONCEPTS_LIST[Math.abs(CONTENT_SALT) % CONCEPTS_LIST.length];
+
+// Per-Vertical / Per-Hub LeadSmart Tracking DIDs (defaults cleanly to primary portfolio phone)
+export const PHONE_WATER_PRESSURE = process.env.NEXT_PUBLIC_PHONE_WATER_PRESSURE ?? PHONE_NUMBER;
+export const PHONE_BACKFLOW       = process.env.NEXT_PUBLIC_PHONE_BACKFLOW       ?? PHONE_NUMBER;
+export const PHONE_REPIPE         = process.env.NEXT_PUBLIC_PHONE_REPIPE         ?? PHONE_NUMBER;
+
+export function getDidForService(serviceSlugOrCategory?: string): { number: string; tel: string } {
+  if (!serviceSlugOrCategory) return { number: PHONE_NUMBER, tel: PHONE_TEL };
+  const s = serviceSlugOrCategory.toLowerCase();
+  let num = PHONE_NUMBER;
+  if (s.includes("water-pressure") || s.includes("prv")) {
+    num = PHONE_WATER_PRESSURE;
+  } else if (s.includes("backflow")) {
+    num = PHONE_BACKFLOW;
+  } else if (s.includes("repipe") || s.includes("pipe")) {
+    num = PHONE_REPIPE;
+  }
+  return {
+    number: num,
+    tel: num.replace(/\D/g, ""),
+  };
+}

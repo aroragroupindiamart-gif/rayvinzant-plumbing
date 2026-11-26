@@ -1,8 +1,8 @@
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import Link from "next/link";
 import type { Metadata } from "next";
 import {
-  getAllLocations, getLocation, getServicesByLocationTier,
+  getAllLocations, getLocation, getLocationBySlugOnly, getServicesByLocationTier,
   isLocationAllowed,
 } from "@/lib/data";
 import {
@@ -12,7 +12,7 @@ import {
 import Footer from "@/components/Footer";
 import { tokens } from "@/lib/tokens";
 
-export const revalidate = 2592000; // 30 days edge cache
+export const revalidate = 604800; // 7 days edge cache
 export const dynamicParams = true;
 
 interface Props {
@@ -21,16 +21,28 @@ interface Props {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { state, place } = await params;
+
+  if (state.includes("{") || place.includes("{") || state.includes("$") || state.includes("&")) {
+    permanentRedirect("/");
+  }
+
   const stateCode = state.toUpperCase();
   const loc = await getLocation(stateCode, place);
-  if (!loc) return { title: "Not Found" };
-  const allowed = await isLocationAllowed(stateCode, place);
-  if (!allowed) return { title: "Not Found" };
+  if (!loc) {
+    const realLoc = getLocationBySlugOnly(place);
+    if (realLoc) {
+      permanentRedirect(`/${realLoc.state_code.toLowerCase()}/${realLoc.place_slug}`);
+    }
+    return { title: "Not Found" };
+  }
 
+
+  const isAllowed = await isLocationAllowed(stateCode, loc.place_slug);
   const canonicalUrl = `${SITE_URL}/${stateCode.toLowerCase()}/${loc.place_slug}`;
   return {
     title: `${NICHE_PLURAL} in ${loc.place_name}, ${stateCode} | ${BRAND_NAME}`,
     description: `Find licensed ${NICHE_PLURAL.toLowerCase()} in ${loc.place_name}, ${loc.state_name}. 24/7 service available. Call ${PHONE_NUMBER}.`,
+    robots: isAllowed ? { index: true, follow: true } : { index: false, follow: true },
     alternates: { canonical: canonicalUrl },
     openGraph: { url: canonicalUrl },
   };
@@ -38,12 +50,22 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function CityPage({ params }: Props) {
   const { state, place } = await params;
-  const stateCode = state.toUpperCase();
-  const loc = await getLocation(stateCode, place);
-  if (!loc) notFound();
 
-  const allowed = await isLocationAllowed(stateCode, place);
-  if (!allowed) notFound();
+  if (state.includes("{") || place.includes("{") || state.includes("$") || state.includes("&")) {
+    permanentRedirect("/");
+  }
+
+  const stateCode = state.toUpperCase();
+  let loc = await getLocation(stateCode, place);
+  if (!loc) {
+    const realLoc = getLocationBySlugOnly(place);
+    if (realLoc) {
+      permanentRedirect(`/${realLoc.state_code.toLowerCase()}/${realLoc.place_slug}`);
+    }
+    notFound();
+  }
+
+
 
   const services = await getServicesByLocationTier(loc.tier);
   const t = (tokens as Record<string, any>)[ACTIVE_CONCEPT] || tokens.dispatch;

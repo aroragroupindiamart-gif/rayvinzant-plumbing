@@ -8,10 +8,14 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 25
     permissions:
       contents: read
       deployments: write
@@ -52,7 +56,12 @@ jobs:
           NEXT_PUBLIC_ADSENSE_ID: ${{ secrets.NEXT_PUBLIC_ADSENSE_ID }}
           NEXT_PUBLIC_GSC_TOKEN: ${{ secrets.NEXT_PUBLIC_GSC_TOKEN }}
           NEXT_PUBLIC_LAUNCH_DATE: ${{ secrets.NEXT_PUBLIC_LAUNCH_DATE }}
+          NEXT_PUBLIC_DRIP_MODE: ${{ secrets.NEXT_PUBLIC_DRIP_MODE || 'progressive' }}
           NEXT_PUBLIC_CONTENT_SALT: ${{ secrets.NEXT_PUBLIC_CONTENT_SALT }}
+          NEXT_PUBLIC_DESIGN_CONCEPT: ${{ secrets.NEXT_PUBLIC_DESIGN_CONCEPT }}
+          NEXT_PUBLIC_PHONE_WATER_PRESSURE: ${{ secrets.NEXT_PUBLIC_PHONE_WATER_PRESSURE }}
+          NEXT_PUBLIC_PHONE_BACKFLOW: ${{ secrets.NEXT_PUBLIC_PHONE_BACKFLOW }}
+          NEXT_PUBLIC_PHONE_REPIPE: ${{ secrets.NEXT_PUBLIC_PHONE_REPIPE }}
 
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v4
@@ -61,9 +70,11 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Purge Cloudflare Edge Cache
-        if: success()
+        if: success() && env.CLOUDFLARE_ZONE_ID != ''
         run: |
-          curl -s -X POST "https://api.cloudflare.com/client/v4/zones/946574f5272991cbcf2e5270aa6c825c/purge_cache" \
+          curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${{ secrets.CLOUDFLARE_ZONE_ID }}/purge_cache" \
             -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
             -H "Content-Type: application/json" \
             --data '{"purge_everything":true}'
+        env:
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
